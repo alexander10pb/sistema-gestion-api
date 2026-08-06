@@ -12,7 +12,6 @@ idna==3.18
 motor==3.5.1
 passlib==1.7.4
 pydantic==2.9.2
-pydantic_core==2.23.4
 PyJWT==2.9.0
 pymongo==4.8.0
 python-dotenv==1.0.1
