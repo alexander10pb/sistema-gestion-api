@@ -126,3 +126,9 @@ htmlcov/
 *.pem
 *.key
 *.crt
+
+# =========================
+# Uploaded files
+# =========================
+static/productos/*
+!static/productos/.gitkeep
