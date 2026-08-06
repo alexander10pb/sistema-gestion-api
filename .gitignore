@@ -1,0 +1,128 @@
+# =========================
+# Python
+# =========================
+
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Pip
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+
+# =========================
+# FastAPI / Uvicorn
+# =========================
+
+*.log
+uvicorn.log
+
+
+# =========================
+# Environment variables
+# =========================
+
+.env
+.env.*
+!.env.example
+
+
+# =========================
+# Database
+# =========================
+
+# SQLite (si usas localmente)
+*.db
+*.sqlite
+*.sqlite3
+
+
+# =========================
+# IDEs / Editors
+# =========================
+
+.vscode/
+.idea/
+
+# VS Code settings
+*.code-workspace
+
+
+# =========================
+# OS files
+# =========================
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# macOS
+.DS_Store
+
+
+# =========================
+# Tests / Coverage
+# =========================
+
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+
+# =========================
+# Jupyter
+# =========================
+
+.ipynb_checkpoints/
+
+
+# =========================
+# Temporary files
+# =========================
+
+*.tmp
+*.temp
+*.bak
+
+
+# =========================
+# Security
+# =========================
+
+*.pem
+*.key
+*.crt
