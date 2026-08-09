@@ -1,21 +1,18 @@
-import uuid
 from pathlib import Path
 from typing import List, Optional
 
+import cloudinary.uploader
 from bson import ObjectId
 from bson.errors import InvalidId
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
+from app import cloudinary_config
 from app.auth.dependencies import get_current_user
 from app.database import productos_collection
 from app.schemas import CategoriaProducto, ProductoCreate, ProductoOut, ProductoUpdate
 from app.utils import producto_helper
 
 router = APIRouter(prefix="/productos", tags=["Productos"])
-
-# Carpeta donde se guardan las imágenes subidas; se sirve como estática en main.py
-CARPETA_IMAGENES = Path("static/productos")
-CARPETA_IMAGENES.mkdir(parents=True, exist_ok=True)
 
 EXTENSIONES_PERMITIDAS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 TAMANO_MAXIMO_MB = 5
@@ -82,45 +79,89 @@ async def crear_producto(producto: ProductoCreate, _usuario: dict = Depends(get_
 )
 async def subir_imagen_producto(
     producto_id: str,
-    archivo: UploadFile = File(..., description="Imagen del producto (jpg, png, webp o gif, máx. 5 MB)"),
+    archivo: UploadFile = File(
+        ...,
+        description="Imagen del producto (jpg, png, webp o gif, máx. 5 MB)",
+    ),
     _usuario: dict = Depends(get_current_user),
 ):
-    """Sube una imagen y la asocia al producto. Si ya tenía una, la reemplaza."""
+    """Sube una imagen a Cloudinary y la asocia al producto."""
+
     oid = validar_object_id(producto_id)
+
     producto = await productos_collection.find_one({"_id": oid})
+
     if producto is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Producto no encontrado")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Producto no encontrado",
+        )
 
     extension = Path(archivo.filename or "").suffix.lower()
+
     if extension not in EXTENSIONES_PERMITIDAS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Formato no soportado. Usa: {', '.join(sorted(EXTENSIONES_PERMITIDAS))}",
+            detail=(
+                f"Formato no soportado. Usa: "
+                f"{', '.join(sorted(EXTENSIONES_PERMITIDAS))}"
+            ),
         )
 
     contenido = await archivo.read()
+
     if len(contenido) > TAMANO_MAXIMO_MB * 1024 * 1024:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"La imagen supera el tamaño máximo de {TAMANO_MAXIMO_MB} MB",
+            detail=(
+                f"La imagen supera el tamaño máximo de "
+                f"{TAMANO_MAXIMO_MB} MB"
+            ),
         )
 
-    # Si el producto ya tenía una imagen local, se borra para no dejar archivos huérfanos
-    imagen_anterior = producto.get("imagen_url")
-    if imagen_anterior and imagen_anterior.startswith("/static/productos/"):
-        ruta_anterior = Path(imagen_anterior.lstrip("/"))
-        if ruta_anterior.exists():
-            ruta_anterior.unlink()
+    # Guardamos los datos de la imagen anterior
+    public_id_anterior = producto.get("imagen_public_id")
 
-    nombre_archivo = f"{uuid.uuid4().hex}{extension}"
-    ruta_destino = CARPETA_IMAGENES / nombre_archivo
-    with open(ruta_destino, "wb") as f:
-        f.write(contenido)
+    try:
+        # Subir nueva imagen a Cloudinary
+        resultado = cloudinary.uploader.upload(
+            contenido,
+            folder="cafeteria/productos",
+            resource_type="image",
+        )
 
-    imagen_url = f"/static/productos/{nombre_archivo}"
-    await productos_collection.update_one({"_id": oid}, {"$set": {"imagen_url": imagen_url}})
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al subir la imagen: {str(e)}",
+        )
+
+    imagen_url = resultado["secure_url"]
+    public_id_nuevo = resultado["public_id"]
+
+    # Guardar la nueva imagen en MongoDB
+    await productos_collection.update_one(
+        {"_id": oid},
+        {
+            "$set": {
+                "imagen_url": imagen_url,
+                "imagen_public_id": public_id_nuevo,
+            }
+        },
+    )
+
+    # Si había una imagen anterior de Cloudinary, eliminarla
+    if public_id_anterior:
+        try:
+            cloudinary.uploader.destroy(
+                public_id_anterior,
+                resource_type="image",
+            )
+        except Exception as e:
+            print(f"No se pudo eliminar la imagen anterior: {e}")
 
     actualizado = await productos_collection.find_one({"_id": oid})
+
     return producto_helper(actualizado)
 
 
@@ -129,20 +170,45 @@ async def subir_imagen_producto(
     response_model=ProductoOut,
     summary="Quitar la imagen de un producto",
 )
-async def eliminar_imagen_producto(producto_id: str, _usuario: dict = Depends(get_current_user)):
+async def eliminar_imagen_producto(
+    producto_id: str,
+    _usuario: dict = Depends(get_current_user),
+):
     oid = validar_object_id(producto_id)
+
     producto = await productos_collection.find_one({"_id": oid})
+
     if producto is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Producto no encontrado")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Producto no encontrado",
+        )
 
-    imagen_actual = producto.get("imagen_url")
-    if imagen_actual and imagen_actual.startswith("/static/productos/"):
-        ruta = Path(imagen_actual.lstrip("/"))
-        if ruta.exists():
-            ruta.unlink()
+    public_id = producto.get("imagen_public_id")
 
-    await productos_collection.update_one({"_id": oid}, {"$set": {"imagen_url": None}})
+    # Eliminar imagen de Cloudinary
+    if public_id:
+        try:
+            cloudinary.uploader.destroy(
+                public_id,
+                resource_type="image",
+            )
+        except Exception as e:
+            print(f"No se pudo eliminar la imagen de Cloudinary: {e}")
+
+    # Limpiar referencias en MongoDB
+    await productos_collection.update_one(
+        {"_id": oid},
+        {
+            "$set": {
+                "imagen_url": None,
+                "imagen_public_id": None,
+            }
+        },
+    )
+
     actualizado = await productos_collection.find_one({"_id": oid})
+
     return producto_helper(actualizado)
 
 
@@ -172,18 +238,34 @@ async def actualizar_producto(
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Eliminar un producto",
 )
-async def eliminar_producto(producto_id: str, _usuario: dict = Depends(get_current_user)):
-    """Elimina un producto del menú por id (DELETE). Requiere estar autenticado."""
-    oid = validar_object_id(producto_id)
-    producto = await productos_collection.find_one({"_id": oid})
-    if producto is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Producto no encontrado")
+async def eliminar_producto(
+    producto_id: str,
+    _usuario: dict = Depends(get_current_user),
+):
+    """Elimina un producto del menú por id."""
 
-    imagen_url = producto.get("imagen_url")
-    if imagen_url and imagen_url.startswith("/static/productos/"):
-        ruta = Path(imagen_url.lstrip("/"))
-        if ruta.exists():
-            ruta.unlink()
+    oid = validar_object_id(producto_id)
+
+    producto = await productos_collection.find_one({"_id": oid})
+
+    if producto is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Producto no encontrado",
+        )
+
+    public_id = producto.get("imagen_public_id")
+
+    # Eliminar imagen de Cloudinary si existe
+    if public_id:
+        try:
+            cloudinary.uploader.destroy(
+                public_id,
+                resource_type="image",
+            )
+        except Exception as e:
+            print(f"No se pudo eliminar la imagen: {e}")
 
     await productos_collection.delete_one({"_id": oid})
+
     return None
