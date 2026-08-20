@@ -5,15 +5,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.database import crear_indices
-from app.routers import auth, productos
+from app.routers import auth, productos, eventos
 
 
 app = FastAPI(
-    title="Cafetería API",
+    title="Sistema de Gestión API",
     description=(
-        "API REST para administrar el menú de la cafetería institucional "
-        "(desayunos, almuerzos, bebidas y postres). "
-        "Documentación interactiva disponible en /docs (Swagger UI) y /redoc."
+        "API REST desarrollada con FastAPI para la gestión de usuarios, "
+        "productos y eventos. Permite la autenticación y autorización "
+        "de usuarios mediante JWT, administración de productos y "
+        "gestión de eventos e inscripciones con control de cupos "
+        "disponibles. "
+        "La API cuenta con documentación interactiva disponible "
+        "en /docs (Swagger UI) y /redoc."
     ),
     version="1.0.0",
 )
@@ -56,6 +60,7 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(productos.router)
+app.include_router(eventos.router)
 
 
 # ============================================================
