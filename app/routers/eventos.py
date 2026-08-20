@@ -1,38 +1,85 @@
 from datetime import datetime
+from pathlib import Path
 from typing import List
 
+import cloudinary.uploader
 from bson import ObjectId
 from bson.errors import InvalidId
-from pymongo.errors import DuplicateKeyError
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    UploadFile,
+    status,
+)
 from pymongo import ReturnDocument
-from fastapi import APIRouter, Depends, HTTPException, status
+from pymongo.errors import DuplicateKeyError
 
+from app import cloudinary_config
 from app.auth.dependencies import get_current_user
 from app.database import eventos_collection, inscripciones_collection
-from app.schemas import EventoCreate, EventoOut, EventoUpdate, InscripcionOut
+from app.schemas import (
+    EventoCreate,
+    EventoOut,
+    EventoUpdate,
+    InscripcionOut,
+)
 
 
 router = APIRouter(
     prefix="/eventos",
-    tags=["Eventos"]
+    tags=["Eventos"],
 )
 
+
+# ============================================================
+# CONFIGURACIÓN DE IMÁGENES
+# ============================================================
+
+EXTENSIONES_PERMITIDAS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".gif",
+}
+
+TAMANO_MAXIMO_MB = 5
+
+
+# ============================================================
+# FUNCIONES AUXILIARES
+# ============================================================
+
 def validar_object_id(evento_id: str) -> ObjectId:
+    """
+    Valida que el ID recibido tenga un formato válido de MongoDB.
+    """
+
     try:
         return ObjectId(evento_id)
+
     except InvalidId:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="El id del evento no tiene un formato válido"
+            detail="El id del evento no tiene un formato válido",
         )
 
+
 async def evento_helper(evento: dict) -> dict:
+    """
+    Convierte un documento de MongoDB al formato de respuesta
+    utilizado por EventoOut.
+    """
+
     inscritos = evento.get("inscritos", 0)
 
     return {
         "_id": str(evento["_id"]),
         "nombre": evento["nombre"],
         "descripcion": evento.get("descripcion"),
+        "categoria": evento["categoria"],
         "fecha": evento["fecha"],
         "lugar": evento["lugar"],
         "cupo_maximo": evento["cupo_maximo"],
@@ -40,16 +87,27 @@ async def evento_helper(evento: dict) -> dict:
         "inscritos": inscritos,
         "cupos_disponibles": max(
             evento["cupo_maximo"] - inscritos,
-            0
-        )
+            0,
+        ),
+        "imagen_url": evento.get("imagen_url"),
     }
+
+
+# ============================================================
+# LISTAR EVENTOS
+# ============================================================
 
 @router.get(
     "",
     response_model=List[EventoOut],
-    summary="Listar eventos"
+    summary="Listar eventos",
 )
 async def listar_eventos():
+    """
+    Lista todos los eventos activos.
+
+    Los eventos se ordenan por fecha ascendente.
+    """
 
     eventos = []
 
@@ -63,43 +121,109 @@ async def listar_eventos():
 
     return eventos
 
+
+# ============================================================
+# MIS INSCRIPCIONES
+# ============================================================
+# IMPORTANTE:
+# Esta ruta debe estar antes de /{evento_id} para evitar
+# que "mis-inscripciones" sea interpretado como un ID.
+# ============================================================
+
+@router.get(
+    "/mis-inscripciones",
+    response_model=List[InscripcionOut],
+    summary="Consultar mis inscripciones",
+)
+async def mis_inscripciones(
+    usuario: dict = Depends(get_current_user),
+):
+    """
+    Consulta las inscripciones activas del usuario autenticado.
+    """
+
+    usuario_id = str(usuario["_id"])
+
+    inscripciones = []
+
+    async for inscripcion in inscripciones_collection.find(
+        {
+            "usuario_id": usuario_id,
+            "estado": "activa",
+        }
+    ).sort("fecha_inscripcion", -1):
+
+        inscripcion["_id"] = str(
+            inscripcion["_id"]
+        )
+
+        inscripciones.append(inscripcion)
+
+    return inscripciones
+
+
+# ============================================================
+# OBTENER EVENTO POR ID
+# ============================================================
+
 @router.get(
     "/{evento_id}",
     response_model=EventoOut,
-    summary="Obtener un evento por id"
+    summary="Obtener un evento por id",
 )
-async def obtener_evento(evento_id: str):
+async def obtener_evento(
+    evento_id: str,
+):
+    """
+    Obtiene un evento específico por su ID.
+    """
 
     oid = validar_object_id(evento_id)
 
-    evento = await eventos_collection.find_one({
-        "_id": oid
-    })
+    evento = await eventos_collection.find_one(
+        {
+            "_id": oid,
+        }
+    )
 
     if evento is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Evento no encontrado"
+            detail="Evento no encontrado",
         )
 
     return await evento_helper(evento)
+
+
+# ============================================================
+# CREAR EVENTO
+# ============================================================
 
 @router.post(
     "",
     response_model=EventoOut,
     status_code=status.HTTP_201_CREATED,
-    summary="Registrar un nuevo evento"
+    summary="Registrar un nuevo evento",
 )
 async def crear_evento(
     evento: EventoCreate,
-    _usuario: dict = Depends(get_current_user)
+    _usuario: dict = Depends(get_current_user),
 ):
-    """Crea un nuevo evento. Requiere autenticación."""
+    """
+    Crea un nuevo evento.
+
+    Requiere autenticación.
+    """
 
     nuevo_evento = evento.model_dump()
 
     nuevo_evento["activo"] = True
     nuevo_evento["inscritos"] = 0
+
+    # Datos de la imagen
+    nuevo_evento["imagen_url"] = None
+    nuevo_evento["imagen_public_id"] = None
+
     nuevo_evento["created_at"] = datetime.utcnow()
     nuevo_evento["updated_at"] = datetime.utcnow()
 
@@ -107,118 +231,431 @@ async def crear_evento(
         nuevo_evento
     )
 
-    creado = await eventos_collection.find_one({
-        "_id": resultado.inserted_id
-    })
+    creado = await eventos_collection.find_one(
+        {
+            "_id": resultado.inserted_id,
+        }
+    )
 
     return await evento_helper(creado)
 
-@router.put(
-    "/{evento_id}",
+
+# ============================================================
+# SUBIR / REEMPLAZAR IMAGEN
+# ============================================================
+
+@router.post(
+    "/{evento_id}/imagen",
     response_model=EventoOut,
-    summary="Actualizar un evento"
+    summary="Subir o reemplazar la imagen de un evento",
 )
-async def actualizar_evento(
+async def subir_imagen_evento(
     evento_id: str,
-    cambios: EventoUpdate,
-    _usuario: dict = Depends(get_current_user)
+    archivo: UploadFile = File(
+        ...,
+        description=(
+            "Imagen del evento "
+            "(jpg, png, webp o gif, máx. 5 MB)"
+        ),
+    ),
+    _usuario: dict = Depends(get_current_user),
 ):
+    """
+    Sube una imagen a Cloudinary y la asocia al evento.
+
+    Si el evento ya tenía una imagen, la imagen anterior
+    será eliminada de Cloudinary después de subir la nueva.
+    """
 
     oid = validar_object_id(evento_id)
 
-    datos = {
-        k: v
-        for k, v in cambios.model_dump(
-            exclude_unset=True
-        ).items()
-    }
+    # --------------------------------------------------------
+    # Verificar evento
+    # --------------------------------------------------------
 
-    if not datos:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Debe enviar al menos un campo para actualizar"
-        )
-
-    # Verificar que no se reduzca el cupo
-    # por debajo de los inscritos actuales
-    if "cupo_maximo" in datos:
-
-        inscritos = await inscripciones_collection.count_documents({
-            "evento_id": evento_id,
-            "estado": "activa"
-        })
-
-        if datos["cupo_maximo"] < inscritos:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"El cupo máximo no puede ser menor "
-                    f"al número actual de inscritos ({inscritos})"
-                )
-            )
-
-    datos["updated_at"] = datetime.utcnow()
-
-    resultado = await eventos_collection.update_one(
-        {"_id": oid},
-        {"$set": datos}
+    evento = await eventos_collection.find_one(
+        {
+            "_id": oid,
+        }
     )
-
-    if resultado.matched_count == 0:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Evento no encontrado"
-        )
-
-    actualizado = await eventos_collection.find_one({
-        "_id": oid
-    })
-
-    return await evento_helper(actualizado)
-
-@router.delete(
-    "/{evento_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Desactivar un evento"
-)
-async def eliminar_evento(
-    evento_id: str,
-    _usuario: dict = Depends(get_current_user)
-):
-
-    oid = validar_object_id(evento_id)
-
-    evento = await eventos_collection.find_one({
-        "_id": oid
-    })
 
     if evento is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Evento no encontrado"
+            detail="Evento no encontrado",
         )
 
+    # --------------------------------------------------------
+    # Validar extensión
+    # --------------------------------------------------------
+
+    extension = Path(
+        archivo.filename or ""
+    ).suffix.lower()
+
+    if extension not in EXTENSIONES_PERMITIDAS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Formato no soportado. Usa: "
+                f"{', '.join(sorted(EXTENSIONES_PERMITIDAS))}"
+            ),
+        )
+
+    # --------------------------------------------------------
+    # Leer archivo
+    # --------------------------------------------------------
+
+    contenido = await archivo.read()
+
+    if len(contenido) > TAMANO_MAXIMO_MB * 1024 * 1024:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "La imagen supera el tamaño máximo de "
+                f"{TAMANO_MAXIMO_MB} MB"
+            ),
+        )
+
+    # --------------------------------------------------------
+    # Guardar referencia de imagen anterior
+    # --------------------------------------------------------
+
+    public_id_anterior = evento.get(
+        "imagen_public_id"
+    )
+
+    # --------------------------------------------------------
+    # Subir imagen a Cloudinary
+    # --------------------------------------------------------
+
+    try:
+
+        resultado = cloudinary.uploader.upload(
+            contenido,
+            folder="cafeteria/eventos",
+            resource_type="image",
+        )
+
+    except Exception as e:
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al subir la imagen: {str(e)}",
+        )
+
+    imagen_url = resultado["secure_url"]
+    public_id_nuevo = resultado["public_id"]
+
+    # --------------------------------------------------------
+    # Guardar referencias en MongoDB
+    # --------------------------------------------------------
+
     await eventos_collection.update_one(
-        {"_id": oid},
+        {
+            "_id": oid,
+        },
         {
             "$set": {
-                "activo": False,
-                "updated_at": datetime.utcnow()
+                "imagen_url": imagen_url,
+                "imagen_public_id": public_id_nuevo,
+                "updated_at": datetime.utcnow(),
             }
+        },
+    )
+
+    # --------------------------------------------------------
+    # Eliminar imagen anterior
+    # --------------------------------------------------------
+
+    if public_id_anterior:
+
+        try:
+
+            cloudinary.uploader.destroy(
+                public_id_anterior,
+                resource_type="image",
+            )
+
+        except Exception as e:
+
+            print(
+                "No se pudo eliminar la imagen anterior: "
+                f"{e}"
+            )
+
+    # --------------------------------------------------------
+    # Obtener evento actualizado
+    # --------------------------------------------------------
+
+    actualizado = await eventos_collection.find_one(
+        {
+            "_id": oid,
         }
     )
 
+    return await evento_helper(actualizado)
+
+
+# ============================================================
+# ELIMINAR IMAGEN
+# ============================================================
+
+@router.delete(
+    "/{evento_id}/imagen",
+    response_model=EventoOut,
+    summary="Quitar la imagen de un evento",
+)
+async def eliminar_imagen_evento(
+    evento_id: str,
+    _usuario: dict = Depends(get_current_user),
+):
+    """
+    Elimina la imagen del evento de Cloudinary
+    y limpia sus referencias en MongoDB.
+    """
+
+    oid = validar_object_id(evento_id)
+
+    evento = await eventos_collection.find_one(
+        {
+            "_id": oid,
+        }
+    )
+
+    if evento is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evento no encontrado",
+        )
+
+    public_id = evento.get(
+        "imagen_public_id"
+    )
+
+    # --------------------------------------------------------
+    # Eliminar de Cloudinary
+    # --------------------------------------------------------
+
+    if public_id:
+
+        try:
+
+            cloudinary.uploader.destroy(
+                public_id,
+                resource_type="image",
+            )
+
+        except Exception as e:
+
+            print(
+                "No se pudo eliminar la imagen de "
+                f"Cloudinary: {e}"
+            )
+
+    # --------------------------------------------------------
+    # Limpiar MongoDB
+    # --------------------------------------------------------
+
+    await eventos_collection.update_one(
+        {
+            "_id": oid,
+        },
+        {
+            "$set": {
+                "imagen_url": None,
+                "imagen_public_id": None,
+                "updated_at": datetime.utcnow(),
+            }
+        },
+    )
+
+    actualizado = await eventos_collection.find_one(
+        {
+            "_id": oid,
+        }
+    )
+
+    return await evento_helper(actualizado)
+
+
+# ============================================================
+# ACTUALIZAR EVENTO
+# ============================================================
+
+@router.put(
+    "/{evento_id}",
+    response_model=EventoOut,
+    summary="Actualizar un evento",
+)
+async def actualizar_evento(
+    evento_id: str,
+    cambios: EventoUpdate,
+    _usuario: dict = Depends(get_current_user),
+):
+    """
+    Actualiza uno o varios campos de un evento.
+
+    No permite reducir el cupo máximo por debajo
+    de la cantidad actual de inscritos.
+    """
+
+    oid = validar_object_id(evento_id)
+
+    # --------------------------------------------------------
+    # Obtener evento actual
+    # --------------------------------------------------------
+
+    evento = await eventos_collection.find_one(
+        {
+            "_id": oid,
+        }
+    )
+
+    if evento is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evento no encontrado",
+        )
+
+    # --------------------------------------------------------
+    # Obtener únicamente los campos enviados
+    # --------------------------------------------------------
+
+    datos = cambios.model_dump(
+        exclude_unset=True
+    )
+
+    if not datos:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Debe enviar al menos un campo "
+                "para actualizar"
+            ),
+        )
+
+    # --------------------------------------------------------
+    # Validar cupo máximo
+    # --------------------------------------------------------
+
+    if "cupo_maximo" in datos:
+
+        inscritos = await inscripciones_collection.count_documents(
+            {
+                "evento_id": evento_id,
+                "estado": "activa",
+            }
+        )
+
+        if datos["cupo_maximo"] < inscritos:
+
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "El cupo máximo no puede ser menor "
+                    "al número actual de inscritos "
+                    f"({inscritos})"
+                ),
+            )
+
+    # --------------------------------------------------------
+    # Actualizar fecha de modificación
+    # --------------------------------------------------------
+
+    datos["updated_at"] = datetime.utcnow()
+
+    # --------------------------------------------------------
+    # Actualizar MongoDB
+    # --------------------------------------------------------
+
+    resultado = await eventos_collection.update_one(
+        {
+            "_id": oid,
+        },
+        {
+            "$set": datos,
+        },
+    )
+
+    if resultado.matched_count == 0:
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evento no encontrado",
+        )
+
+    actualizado = await eventos_collection.find_one(
+        {
+            "_id": oid,
+        }
+    )
+
+    return await evento_helper(actualizado)
+
+
+# ============================================================
+# DESACTIVAR EVENTO
+# ============================================================
+
+@router.delete(
+    "/{evento_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Desactivar un evento",
+)
+async def eliminar_evento(
+    evento_id: str,
+    _usuario: dict = Depends(get_current_user),
+):
+    """
+    Desactiva un evento.
+
+    No elimina físicamente el documento de MongoDB.
+    """
+
+    oid = validar_object_id(evento_id)
+
+    evento = await eventos_collection.find_one(
+        {
+            "_id": oid,
+        }
+    )
+
+    if evento is None:
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evento no encontrado",
+        )
+
+    await eventos_collection.update_one(
+        {
+            "_id": oid,
+        },
+        {
+            "$set": {
+                "activo": False,
+                "updated_at": datetime.utcnow(),
+            }
+        },
+    )
+
     return None
+
+
+# ============================================================
+# INSCRIBIRSE A EVENTO
+# ============================================================
 
 @router.post(
     "/{evento_id}/inscribirse",
     response_model=InscripcionOut,
     status_code=status.HTTP_201_CREATED,
-    summary="Inscribirse a un evento"
+    summary="Inscribirse a un evento",
 )
 async def inscribirse_evento(
     evento_id: str,
-    usuario: dict = Depends(get_current_user)
+    usuario: dict = Depends(get_current_user),
 ):
     """
     Inscribe al usuario autenticado en un evento.
@@ -230,204 +667,327 @@ async def inscribirse_evento(
 
     oid = validar_object_id(evento_id)
 
-    usuario_id = str(usuario["_id"])
+    usuario_id = str(
+        usuario["_id"]
+    )
 
-    # -------------------------------------------------
-    # 1. Verificar que el usuario no esté inscrito
-    # -------------------------------------------------
+    # --------------------------------------------------------
+    # 1. Verificar que el evento exista
+    # --------------------------------------------------------
 
-    inscripcion_existente = await inscripciones_collection.find_one({
-        "evento_id": evento_id,
-        "usuario_id": usuario_id,
-        "estado": "activa"
-    })
-
-    if inscripcion_existente:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Ya estás inscrito en este evento"
-        )
-
-    # -------------------------------------------------
-    # 2. Incrementar inscritos SOLO si todavía hay cupo
-    # -------------------------------------------------
-
-    evento_actualizado = await eventos_collection.find_one_and_update(
+    evento = await eventos_collection.find_one(
         {
             "_id": oid,
-            "activo": True,
-            "$expr": {
-                "$lt": [
-                    {"$ifNull": ["$inscritos", 0]},
-                    "$cupo_maximo"
-                ]
+        }
+    )
+
+    if evento is None:
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evento no encontrado",
+        )
+
+    # --------------------------------------------------------
+    # 2. Verificar que el usuario no esté inscrito
+    # --------------------------------------------------------
+
+    inscripcion_existente = (
+        await inscripciones_collection.find_one(
+            {
+                "evento_id": evento_id,
+                "usuario_id": usuario_id,
+                "estado": "activa",
             }
-        },
-        {
-            "$inc": {
-                "inscritos": 1
-            }
-        },
-        return_document=ReturnDocument.AFTER
+        )
+    )
+
+    if inscripcion_existente:
+
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ya estás inscrito en este evento",
+        )
+
+    # --------------------------------------------------------
+    # 3. Incrementar inscritos solo si hay cupo
+    # --------------------------------------------------------
+
+    evento_actualizado = (
+        await eventos_collection.find_one_and_update(
+            {
+                "_id": oid,
+                "activo": True,
+                "$expr": {
+                    "$lt": [
+                        {
+                            "$ifNull": [
+                                "$inscritos",
+                                0,
+                            ]
+                        },
+                        "$cupo_maximo",
+                    ]
+                },
+            },
+            {
+                "$inc": {
+                    "inscritos": 1,
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
     )
 
     if evento_actualizado is None:
+
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="El evento no tiene cupos disponibles"
+            detail="El evento no tiene cupos disponibles",
         )
 
-    # -------------------------------------------------
-    # 3. Crear la inscripción
-    # -------------------------------------------------
+    # --------------------------------------------------------
+    # 4. Crear inscripción
+    # --------------------------------------------------------
 
     nueva_inscripcion = {
         "evento_id": evento_id,
         "usuario_id": usuario_id,
         "fecha_inscripcion": datetime.utcnow(),
-        "estado": "activa"
+        "estado": "activa",
     }
 
     try:
 
-        resultado = await inscripciones_collection.insert_one(
-            nueva_inscripcion
+        resultado = (
+            await inscripciones_collection.insert_one(
+                nueva_inscripcion
+            )
         )
 
     except DuplicateKeyError:
 
-        # Si la inscripción ya existía, debemos devolver
-        # el cupo que acabamos de reservar.
+        # ----------------------------------------------------
+        # Si ya existía la inscripción, devolver el cupo
+        # ----------------------------------------------------
 
         await eventos_collection.update_one(
-            {"_id": oid},
-            {"$inc": {"inscritos": -1}}
+            {
+                "_id": oid,
+                "inscritos": {
+                    "$gt": 0,
+                },
+            },
+            {
+                "$inc": {
+                    "inscritos": -1,
+                }
+            },
         )
 
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Ya estás inscrito en este evento"
+            detail="Ya estás inscrito en este evento",
         )
 
-    # -------------------------------------------------
-    # 4. Obtener inscripción creada
-    # -------------------------------------------------
+    # --------------------------------------------------------
+    # 5. Obtener inscripción creada
+    # --------------------------------------------------------
 
-    inscripcion = await inscripciones_collection.find_one({
-        "_id": resultado.inserted_id
-    })
+    inscripcion = await inscripciones_collection.find_one(
+        {
+            "_id": resultado.inserted_id,
+        }
+    )
 
-    inscripcion["_id"] = str(inscripcion["_id"])
+    if inscripcion is None:
+
+        # Caso extremadamente improbable.
+        # Devolvemos el cupo para mantener consistencia.
+
+        await eventos_collection.update_one(
+            {
+                "_id": oid,
+                "inscritos": {
+                    "$gt": 0,
+                },
+            },
+            {
+                "$inc": {
+                    "inscritos": -1,
+                }
+            },
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="No se pudo obtener la inscripción creada",
+        )
+
+    inscripcion["_id"] = str(
+        inscripcion["_id"]
+    )
 
     return inscripcion
+
+
+# ============================================================
+# CANCELAR INSCRIPCIÓN
+# ============================================================
 
 @router.delete(
     "/{evento_id}/inscribirse",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Cancelar inscripción a un evento"
+    summary="Cancelar inscripción a un evento",
 )
 async def cancelar_inscripcion(
     evento_id: str,
-    usuario: dict = Depends(get_current_user)
+    usuario: dict = Depends(get_current_user),
 ):
     """
-    Cancela la inscripción del usuario autenticado
-    en un evento.
+    Cancela la inscripción activa del usuario autenticado.
+
+    Al cancelar, el contador de inscritos del evento
+    se reduce en uno.
     """
 
     oid = validar_object_id(evento_id)
 
-    # Verificar que el evento exista
-    evento = await eventos_collection.find_one({
-        "_id": oid
-    })
+    usuario_id = str(
+        usuario["_id"]
+    )
+
+    # --------------------------------------------------------
+    # 1. Verificar que el evento exista
+    # --------------------------------------------------------
+
+    evento = await eventos_collection.find_one(
+        {
+            "_id": oid,
+        }
+    )
 
     if evento is None:
+
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Evento no encontrado"
+            detail="Evento no encontrado",
         )
 
-    usuario_id = str(usuario["_id"])
+    # --------------------------------------------------------
+    # 2. Buscar inscripción activa
+    # --------------------------------------------------------
 
-    # Buscar inscripción activa
-    await inscripciones_collection.update_one(
+    inscripcion = await inscripciones_collection.find_one(
         {
-            "_id": inscripcion["_id"]
+            "evento_id": evento_id,
+            "usuario_id": usuario_id,
+            "estado": "activa",
+        }
+    )
+
+    if inscripcion is None:
+
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No tienes una inscripción activa en este evento",
+        )
+
+    # --------------------------------------------------------
+    # 3. Cancelar inscripción
+    # --------------------------------------------------------
+
+    resultado = await inscripciones_collection.update_one(
+        {
+            "_id": inscripcion["_id"],
+            "estado": "activa",
         },
         {
             "$set": {
-                "estado": "cancelada"
+                "estado": "cancelada",
             }
-        }
+        },
     )
+
+    if resultado.modified_count == 0:
+
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La inscripción ya fue cancelada",
+        )
+
+    # --------------------------------------------------------
+    # 4. Liberar cupo
+    # --------------------------------------------------------
 
     await eventos_collection.update_one(
         {
             "_id": oid,
             "inscritos": {
-                "$gt": 0
-            }
+                "$gt": 0,
+            },
         },
         {
             "$inc": {
-                "inscritos": -1
-            }
-        }
+                "inscritos": -1,
+            },
+            "$set": {
+                "updated_at": datetime.utcnow(),
+            },
+        },
     )
 
     return None
 
-@router.get(
-    "/mis-inscripciones",
-    response_model=List[InscripcionOut],
-    summary="Consultar mis inscripciones"
-)
-async def mis_inscripciones(
-    usuario: dict = Depends(get_current_user)
-):
-    usuario_id = str(usuario["_id"])
 
-    inscripciones = []
-
-    async for inscripcion in inscripciones_collection.find({
-        "usuario_id": usuario_id,
-        "estado": "activa"
-    }).sort("fecha_inscripcion", -1):
-
-        inscripcion["_id"] = str(inscripcion["_id"])
-
-        inscripciones.append(inscripcion)
-
-    return inscripciones
+# ============================================================
+# LISTAR INSCRITOS DE UN EVENTO
+# ============================================================
 
 @router.get(
     "/{evento_id}/inscritos",
     response_model=List[InscripcionOut],
-    summary="Consultar inscritos de un evento"
+    summary="Consultar inscritos de un evento",
 )
 async def listar_inscritos(
     evento_id: str,
-    _usuario: dict = Depends(get_current_user)
+    _usuario: dict = Depends(get_current_user),
 ):
+    """
+    Lista las inscripciones activas de un evento.
+    """
+
     oid = validar_object_id(evento_id)
 
-    evento = await eventos_collection.find_one({
-        "_id": oid
-    })
+    # --------------------------------------------------------
+    # Verificar evento
+    # --------------------------------------------------------
+
+    evento = await eventos_collection.find_one(
+        {
+            "_id": oid,
+        }
+    )
 
     if evento is None:
+
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Evento no encontrado"
+            detail="Evento no encontrado",
         )
+
+    # --------------------------------------------------------
+    # Buscar inscritos
+    # --------------------------------------------------------
 
     inscritos = []
 
-    async for inscripcion in inscripciones_collection.find({
-        "evento_id": evento_id,
-        "estado": "activa"
-    }).sort("fecha_inscripcion", 1):
+    async for inscripcion in inscripciones_collection.find(
+        {
+            "evento_id": evento_id,
+            "estado": "activa",
+        }
+    ).sort("fecha_inscripcion", 1):
 
         inscripcion["_id"] = str(
             inscripcion["_id"]
