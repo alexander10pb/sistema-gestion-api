@@ -46,12 +46,20 @@ async def crear_indices():
         "fecha"
     )
 
-    # Evita que un usuario se inscriba dos veces
-    # al mismo evento
+    # Inscripciones
+    # Un usuario no puede tener dos inscripciones
+    # activas en el mismo evento.
+    #
+    # Si cancela su inscripción, puede volver
+    # a inscribirse posteriormente.
+
     await inscripciones_collection.create_index(
         [
             ("evento_id", 1),
             ("usuario_id", 1)
         ],
-        unique=True
+        unique=True,
+        partialFilterExpression={
+            "estado": "activa"
+        }
     )
