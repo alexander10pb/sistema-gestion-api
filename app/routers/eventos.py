@@ -17,7 +17,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from app import cloudinary_config
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import get_current_user, get_current_admin
 from app.database import eventos_collection, inscripciones_collection
 from app.schemas import (
     EventoCreate,
@@ -207,7 +207,7 @@ async def obtener_evento(
 )
 async def crear_evento(
     evento: EventoCreate,
-    _usuario: dict = Depends(get_current_user),
+    _usuario: dict = Depends(get_current_admin),
 ):
     """
     Crea un nuevo evento.
@@ -258,7 +258,7 @@ async def subir_imagen_evento(
             "(jpg, png, webp o gif, máx. 5 MB)"
         ),
     ),
-    _usuario: dict = Depends(get_current_user),
+    _usuario: dict = Depends(get_current_admin),
 ):
     """
     Sube una imagen a Cloudinary y la asocia al evento.
@@ -408,7 +408,7 @@ async def subir_imagen_evento(
 )
 async def eliminar_imagen_evento(
     evento_id: str,
-    _usuario: dict = Depends(get_current_user),
+    _usuario: dict = Depends(get_current_admin),
 ):
     """
     Elimina la imagen del evento de Cloudinary
@@ -491,7 +491,7 @@ async def eliminar_imagen_evento(
 async def actualizar_evento(
     evento_id: str,
     cambios: EventoUpdate,
-    _usuario: dict = Depends(get_current_user),
+    _usuario: dict = Depends(get_current_admin),
 ):
     """
     Actualiza uno o varios campos de un evento.
@@ -605,7 +605,7 @@ async def actualizar_evento(
 )
 async def eliminar_evento(
     evento_id: str,
-    _usuario: dict = Depends(get_current_user),
+    _usuario: dict = Depends(get_current_admin),
 ):
     """
     Desactiva un evento.
@@ -951,7 +951,7 @@ async def cancelar_inscripcion(
 )
 async def listar_inscritos(
     evento_id: str,
-    _usuario: dict = Depends(get_current_user),
+    _usuario: dict = Depends(get_current_admin),
 ):
     """
     Lista las inscripciones activas de un evento.
