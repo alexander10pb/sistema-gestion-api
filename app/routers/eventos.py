@@ -24,7 +24,9 @@ from app.schemas import (
     EventoOut,
     EventoUpdate,
     InscripcionOut,
+    EstadoInscripcion
 )
+from app.utils import evento_helper, validar_object_id
 
 
 router = APIRouter(
@@ -46,51 +48,6 @@ EXTENSIONES_PERMITIDAS = {
 }
 
 TAMANO_MAXIMO_MB = 5
-
-
-# ============================================================
-# FUNCIONES AUXILIARES
-# ============================================================
-
-def validar_object_id(evento_id: str) -> ObjectId:
-    """
-    Valida que el ID recibido tenga un formato válido de MongoDB.
-    """
-
-    try:
-        return ObjectId(evento_id)
-
-    except InvalidId:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="El id del evento no tiene un formato válido",
-        )
-
-
-async def evento_helper(evento: dict) -> dict:
-    """
-    Convierte un documento de MongoDB al formato de respuesta
-    utilizado por EventoOut.
-    """
-
-    inscritos = evento.get("inscritos", 0)
-
-    return {
-        "_id": str(evento["_id"]),
-        "nombre": evento["nombre"],
-        "descripcion": evento.get("descripcion"),
-        "categoria": evento["categoria"],
-        "fecha": evento["fecha"],
-        "lugar": evento["lugar"],
-        "cupo_maximo": evento["cupo_maximo"],
-        "activo": evento.get("activo", True),
-        "inscritos": inscritos,
-        "cupos_disponibles": max(
-            evento["cupo_maximo"] - inscritos,
-            0,
-        ),
-        "imagen_url": evento.get("imagen_url"),
-    }
 
 
 # ============================================================
@@ -116,7 +73,7 @@ async def listar_eventos():
     ).sort("fecha", 1):
 
         eventos.append(
-            await evento_helper(evento)
+            evento_helper(evento)
         )
 
     return eventos
@@ -149,7 +106,7 @@ async def mis_inscripciones(
     async for inscripcion in inscripciones_collection.find(
         {
             "usuario_id": usuario_id,
-            "estado": "activa",
+            "estado": EstadoInscripcion.activa, 
         }
     ).sort("fecha_inscripcion", -1):
 
@@ -178,7 +135,7 @@ async def obtener_evento(
     Obtiene un evento específico por su ID.
     """
 
-    oid = validar_object_id(evento_id)
+    oid = validar_object_id(evento_id, "evento")
 
     evento = await eventos_collection.find_one(
         {
@@ -192,7 +149,7 @@ async def obtener_evento(
             detail="Evento no encontrado",
         )
 
-    return await evento_helper(evento)
+    return evento_helper(evento)
 
 
 # ============================================================
@@ -237,7 +194,7 @@ async def crear_evento(
         }
     )
 
-    return await evento_helper(creado)
+    return evento_helper(creado)
 
 
 # ============================================================
@@ -267,7 +224,7 @@ async def subir_imagen_evento(
     será eliminada de Cloudinary después de subir la nueva.
     """
 
-    oid = validar_object_id(evento_id)
+    oid = validar_object_id(evento_id, "evento")
 
     # --------------------------------------------------------
     # Verificar evento
@@ -394,7 +351,7 @@ async def subir_imagen_evento(
         }
     )
 
-    return await evento_helper(actualizado)
+    return evento_helper(actualizado)
 
 
 # ============================================================
@@ -415,7 +372,7 @@ async def eliminar_imagen_evento(
     y limpia sus referencias en MongoDB.
     """
 
-    oid = validar_object_id(evento_id)
+    oid = validar_object_id(evento_id, "evento")
 
     evento = await eventos_collection.find_one(
         {
@@ -476,7 +433,7 @@ async def eliminar_imagen_evento(
         }
     )
 
-    return await evento_helper(actualizado)
+    return evento_helper(actualizado)
 
 
 # ============================================================
@@ -500,7 +457,7 @@ async def actualizar_evento(
     de la cantidad actual de inscritos.
     """
 
-    oid = validar_object_id(evento_id)
+    oid = validar_object_id(evento_id, "evento")
 
     # --------------------------------------------------------
     # Obtener evento actual
@@ -544,7 +501,7 @@ async def actualizar_evento(
         inscritos = await inscripciones_collection.count_documents(
             {
                 "evento_id": evento_id,
-                "estado": "activa",
+                "estado": EstadoInscripcion.activa,
             }
         )
 
@@ -591,7 +548,7 @@ async def actualizar_evento(
         }
     )
 
-    return await evento_helper(actualizado)
+    return evento_helper(actualizado)
 
 
 # ============================================================
@@ -613,7 +570,7 @@ async def eliminar_evento(
     No elimina físicamente el documento de MongoDB.
     """
 
-    oid = validar_object_id(evento_id)
+    oid = validar_object_id(evento_id, "evento")
 
     evento = await eventos_collection.find_one(
         {
@@ -665,7 +622,7 @@ async def inscribirse_evento(
     el cupo máximo.
     """
 
-    oid = validar_object_id(evento_id)
+    oid = validar_object_id(evento_id, "evento")
 
     usuario_id = str(
         usuario["_id"]
@@ -697,7 +654,7 @@ async def inscribirse_evento(
             {
                 "evento_id": evento_id,
                 "usuario_id": usuario_id,
-                "estado": "activa",
+                "estado": EstadoInscripcion.activa,
             }
         )
     )
@@ -851,7 +808,7 @@ async def cancelar_inscripcion(
     se reduce en uno.
     """
 
-    oid = validar_object_id(evento_id)
+    oid = validar_object_id(evento_id, "evento")
 
     usuario_id = str(
         usuario["_id"]
@@ -882,7 +839,7 @@ async def cancelar_inscripcion(
         {
             "evento_id": evento_id,
             "usuario_id": usuario_id,
-            "estado": "activa",
+            "estado": EstadoInscripcion.activa,
         }
     )
 
@@ -900,11 +857,11 @@ async def cancelar_inscripcion(
     resultado = await inscripciones_collection.update_one(
         {
             "_id": inscripcion["_id"],
-            "estado": "activa",
+            "estado": EstadoInscripcion.activa,
         },
         {
             "$set": {
-                "estado": "cancelada",
+                "estado": EstadoInscripcion.cancelada,
             }
         },
     )
@@ -957,7 +914,7 @@ async def listar_inscritos(
     Lista las inscripciones activas de un evento.
     """
 
-    oid = validar_object_id(evento_id)
+    oid = validar_object_id(evento_id, "evento")
 
     # --------------------------------------------------------
     # Verificar evento
@@ -985,7 +942,7 @@ async def listar_inscritos(
     async for inscripcion in inscripciones_collection.find(
         {
             "evento_id": evento_id,
-            "estado": "activa",
+            "estado": EstadoInscripcion.activa,
         }
     ).sort("fecha_inscripcion", 1):
 

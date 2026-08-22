@@ -10,22 +10,12 @@ from app import cloudinary_config
 from app.auth.dependencies import get_current_user
 from app.database import productos_collection
 from app.schemas import CategoriaProducto, ProductoCreate, ProductoOut, ProductoUpdate
-from app.utils import producto_helper
+from app.utils import producto_helper, validar_object_id
 
 router = APIRouter(prefix="/productos", tags=["Productos"])
 
 EXTENSIONES_PERMITIDAS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 TAMANO_MAXIMO_MB = 5
-
-
-def validar_object_id(producto_id: str) -> ObjectId:
-    try:
-        return ObjectId(producto_id)
-    except InvalidId:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="El id del producto no tiene un formato válido",
-        )
 
 
 @router.get("", response_model=List[ProductoOut], summary="Listar productos del menú")
@@ -51,7 +41,7 @@ async def listar_productos(
 
 @router.get("/{producto_id}", response_model=ProductoOut, summary="Obtener un producto por id")
 async def obtener_producto(producto_id: str):
-    oid = validar_object_id(producto_id)
+    oid = validar_object_id(producto_id, "producto")
     producto = await productos_collection.find_one({"_id": oid})
     if producto is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Producto no encontrado")
@@ -87,7 +77,7 @@ async def subir_imagen_producto(
 ):
     """Sube una imagen a Cloudinary y la asocia al producto."""
 
-    oid = validar_object_id(producto_id)
+    oid = validar_object_id(producto_id, "producto")
 
     producto = await productos_collection.find_one({"_id": oid})
 
@@ -174,7 +164,7 @@ async def eliminar_imagen_producto(
     producto_id: str,
     _usuario: dict = Depends(get_current_user),
 ):
-    oid = validar_object_id(producto_id)
+    oid = validar_object_id(producto_id, "producto")
 
     producto = await productos_collection.find_one({"_id": oid})
 
@@ -216,7 +206,7 @@ async def eliminar_imagen_producto(
 async def actualizar_producto(
     producto_id: str, cambios: ProductoUpdate, _usuario: dict = Depends(get_current_user)
 ):
-    oid = validar_object_id(producto_id)
+    oid = validar_object_id(producto_id, "producto")
     datos = {k: v for k, v in cambios.model_dump(exclude_unset=True).items()}
 
     if not datos:
@@ -244,7 +234,7 @@ async def eliminar_producto(
 ):
     """Elimina un producto del menú por id."""
 
-    oid = validar_object_id(producto_id)
+    oid = validar_object_id(producto_id, "producto")
 
     producto = await productos_collection.find_one({"_id": oid})
 
