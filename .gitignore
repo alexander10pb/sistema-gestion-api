@@ -132,3 +132,9 @@ htmlcov/
 # =========================
 static/productos/*
 !static/productos/.gitkeep
+
+# =========================
+# Type checking
+# =========================
+
+.mypy_cache/
