@@ -296,9 +296,11 @@ async def subir_imagen_evento(
 
     except Exception as e:
 
+        print(f"Error al subir la imagen a Cloudinary: {e}")
+
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error al subir la imagen: {str(e)}",
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="No se pudo subir la imagen",
         )
 
     imagen_url = resultado["secure_url"]

@@ -3,7 +3,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
 from app.database import crear_indices
 from app.routers import auth, productos, eventos
@@ -39,12 +38,18 @@ app = FastAPI(
 # CONFIGURACIÓN CORS
 # ============================================================
 
-origins = [
+ORIGINS_POR_DEFECTO = [
     "https://evsite-v2.vercel.app",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
-    "http://192.168.1.155:3000"
 ]
+
+# Se puede sobrescribir con ALLOWED_ORIGINS="https://a.com,https://b.com"
+origins = [
+    origen.strip()
+    for origen in os.getenv("ALLOWED_ORIGINS", "").split(",")
+    if origen.strip()
+] or ORIGINS_POR_DEFECTO
 
 app.add_middleware(
     CORSMiddleware,

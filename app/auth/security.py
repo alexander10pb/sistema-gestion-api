@@ -3,9 +3,22 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import jwt
+from dotenv import load_dotenv
 from passlib.context import CryptContext
 
-SECRET_KEY = os.getenv("SECRET_KEY", "cambia-esta-clave-en-produccion")
+load_dotenv()
+
+CLAVE_DE_EJEMPLO = "cambia-esta-clave-en-produccion"
+
+SECRET_KEY = os.getenv("SECRET_KEY")
+
+if not SECRET_KEY or SECRET_KEY == CLAVE_DE_EJEMPLO:
+    raise RuntimeError(
+        "La variable de entorno SECRET_KEY no está configurada con una clave "
+        "propia. Genera una con: "
+        'python3 -c "import secrets; print(secrets.token_hex(32))"'
+    )
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 
@@ -41,4 +54,9 @@ def create_access_token(subject: str) -> tuple[str, str, datetime]:
 
 def decode_access_token(token: str) -> dict:
     """Lanza jwt.PyJWTError si el token es inválido o expiró."""
-    return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    return jwt.decode(
+        token,
+        SECRET_KEY,
+        algorithms=[ALGORITHM],
+        options={"require": ["exp", "sub", "jti"]},
+    )
