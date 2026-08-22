@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 
@@ -181,8 +181,8 @@ async def crear_evento(
     nuevo_evento["imagen_url"] = None
     nuevo_evento["imagen_public_id"] = None
 
-    nuevo_evento["created_at"] = datetime.utcnow()
-    nuevo_evento["updated_at"] = datetime.utcnow()
+    nuevo_evento["created_at"] = datetime.now(timezone.utc)
+    nuevo_evento["updated_at"] = datetime.now(timezone.utc)
 
     resultado = await eventos_collection.insert_one(
         nuevo_evento
@@ -316,7 +316,7 @@ async def subir_imagen_evento(
             "$set": {
                 "imagen_url": imagen_url,
                 "imagen_public_id": public_id_nuevo,
-                "updated_at": datetime.utcnow(),
+                "updated_at": datetime.now(timezone.utc),
             }
         },
     )
@@ -422,7 +422,7 @@ async def eliminar_imagen_evento(
             "$set": {
                 "imagen_url": None,
                 "imagen_public_id": None,
-                "updated_at": datetime.utcnow(),
+                "updated_at": datetime.now(timezone.utc),
             }
         },
     )
@@ -520,7 +520,7 @@ async def actualizar_evento(
     # Actualizar fecha de modificación
     # --------------------------------------------------------
 
-    datos["updated_at"] = datetime.utcnow()
+    datos["updated_at"] = datetime.now(timezone.utc)
 
     # --------------------------------------------------------
     # Actualizar MongoDB
@@ -592,7 +592,7 @@ async def eliminar_evento(
         {
             "$set": {
                 "activo": False,
-                "updated_at": datetime.utcnow(),
+                "updated_at": datetime.now(timezone.utc),
             }
         },
     )
@@ -710,7 +710,7 @@ async def inscribirse_evento(
     nueva_inscripcion = {
         "evento_id": evento_id,
         "usuario_id": usuario_id,
-        "fecha_inscripcion": datetime.utcnow(),
+        "fecha_inscripcion": datetime.now(timezone.utc),
         "estado": "activa",
     }
 
@@ -889,7 +889,7 @@ async def cancelar_inscripcion(
                 "inscritos": -1,
             },
             "$set": {
-                "updated_at": datetime.utcnow(),
+                "updated_at": datetime.now(timezone.utc),
             },
         },
     )
