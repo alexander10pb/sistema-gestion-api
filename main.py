@@ -41,9 +41,10 @@ app.mount(
 # ============================================================
 
 origins = [
+    "https://evsite-v2.vercel.app",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
-    "https://evsite-v2.vercel.app"
+    "http://192.168.1.155:3000"
 ]
 
 app.add_middleware(
