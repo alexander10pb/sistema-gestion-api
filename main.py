@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,6 +7,16 @@ from fastapi.staticfiles import StaticFiles
 
 from app.database import crear_indices
 from app.routers import auth, productos, eventos
+
+
+# ============================================================
+# LIFESPAN (startup / shutdown)
+# ============================================================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await crear_indices()
+    yield
 
 
 app = FastAPI(
@@ -20,19 +31,7 @@ app = FastAPI(
         "en /docs (Swagger UI) y /redoc."
     ),
     version="1.0.0",
-)
-
-
-# ============================================================
-# ARCHIVOS ESTÁTICOS
-# ============================================================
-
-os.makedirs("static/productos", exist_ok=True)
-
-app.mount(
-    "/static",
-    StaticFiles(directory="static"),
-    name="static"
+    lifespan=lifespan,
 )
 
 
@@ -63,15 +62,6 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(productos.router)
 app.include_router(eventos.router)
-
-
-# ============================================================
-# STARTUP
-# ============================================================
-
-@app.on_event("startup")
-async def crear_indices_al_iniciar():
-    await crear_indices()
 
 
 # ============================================================
