@@ -457,8 +457,6 @@ async def test_cancel_registration_conflict_when_update_changes_nothing(
     future_date,
     monkeypatch,
 ):
-    from app.auth.security import create_access_token
-
     event = await _insert_event(mock_database["eventos"], future_date, inscritos=1)
     await _insert_registration(
         mock_database["inscripciones"],

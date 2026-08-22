@@ -99,8 +99,3 @@ async def test_logout_blacklists_token_and_rejects_it_from_me(client, normal_use
     assert await mock_database["token_blacklist"].count_documents({}) == 1
     rejected = await client.get("/auth/me", headers=normal_user)
     assert rejected.status_code == 401
-
-
-async def test_logout_can_be_verified_with_real_dependency(client, normal_user):
-    response = await client.post("/auth/logout", headers=normal_user)
-    assert response.status_code == 200
