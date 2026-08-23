@@ -4,6 +4,8 @@ import cloudinary.uploader
 from bson import ObjectId
 from bson.errors import InvalidId
 from fastapi import HTTPException, status
+from motor.motor_asyncio import AsyncIOMotorCollection
+
 
 from app.cloudinary_config import CLOUDINARY_CONFIGURADO
 
@@ -21,6 +23,7 @@ def producto_helper(producto: dict) -> dict:
         "imagen_url": producto.get("imagen_url"),
     }
 
+
 def validar_object_id(id_valor: str, nombre_entidad: str = "recurso") -> ObjectId:
     """
     Valida que el ID recibido tenga un formato válido de MongoDB.
@@ -32,6 +35,23 @@ def validar_object_id(id_valor: str, nombre_entidad: str = "recurso") -> ObjectI
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"El id del {nombre_entidad} no tiene un formato válido",
         ) from exc
+
+
+async def obtener_documento_o_404(
+    coleccion: AsyncIOMotorCollection,
+    object_id: ObjectId,
+    nombre_entidad: str,
+) -> dict:
+    documento = await coleccion.find_one({"_id": object_id})
+
+    if documento is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"{nombre_entidad.capitalize()} no encontrado",
+        )
+
+    return documento
+
 
 def evento_helper(evento: dict) -> dict:
     """

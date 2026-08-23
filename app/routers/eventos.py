@@ -1,6 +1,5 @@
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import List
 
 from fastapi import (
@@ -16,6 +15,7 @@ from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from app.auth.dependencies import get_current_user, get_current_admin
 from app.database import eventos_collection, inscripciones_collection
+from app.image_utils import eliminar_imagen, leer_imagen_validada, subir_imagen
 from app.schemas import (
     EventoCreate,
     EventoOut,
@@ -23,37 +23,13 @@ from app.schemas import (
     InscripcionOut,
     EstadoInscripcion
 )
-from app.utils import (
-    documento_requerido,
-    eliminar_imagen_cloudinary,
-    evento_helper,
-    subir_imagen_cloudinary,
-    validar_object_id,
-)
-
-
-logger = logging.getLogger(__name__)
+from app.utils import evento_helper, obtener_documento_o_404, validar_object_id
 
 
 router = APIRouter(
     prefix="/eventos",
     tags=["Eventos"],
 )
-
-
-# ============================================================
-# CONFIGURACIÓN DE IMÁGENES
-# ============================================================
-
-EXTENSIONES_PERMITIDAS = {
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".webp",
-    ".gif",
-}
-
-TAMANO_MAXIMO_MB = 5
 
 
 # ============================================================
@@ -143,17 +119,11 @@ async def obtener_evento(
 
     oid = validar_object_id(evento_id, "evento")
 
-    evento = await eventos_collection.find_one(
-        {
-            "_id": oid,
-        }
+    evento = await obtener_documento_o_404(
+        eventos_collection,
+        oid,
+        "evento",
     )
-
-    if evento is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Evento no encontrado",
-        )
 
     return evento_helper(evento)
 
@@ -234,53 +204,13 @@ async def subir_imagen_evento(
 
     oid = validar_object_id(evento_id, "evento")
 
-    # --------------------------------------------------------
-    # Verificar evento
-    # --------------------------------------------------------
-
-    evento = await eventos_collection.find_one(
-        {
-            "_id": oid,
-        }
+    evento = await obtener_documento_o_404(
+        eventos_collection,
+        oid,
+        "evento",
     )
 
-    if evento is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Evento no encontrado",
-        )
-
-    # --------------------------------------------------------
-    # Validar extensión
-    # --------------------------------------------------------
-
-    extension = Path(
-        archivo.filename or ""
-    ).suffix.lower()
-
-    if extension not in EXTENSIONES_PERMITIDAS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "Formato no soportado. Usa: "
-                f"{', '.join(sorted(EXTENSIONES_PERMITIDAS))}"
-            ),
-        )
-
-    # --------------------------------------------------------
-    # Leer archivo
-    # --------------------------------------------------------
-
-    contenido = await archivo.read()
-
-    if len(contenido) > TAMANO_MAXIMO_MB * 1024 * 1024:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "La imagen supera el tamaño máximo de "
-                f"{TAMANO_MAXIMO_MB} MB"
-            ),
-        )
+    contenido = await leer_imagen_validada(archivo)
 
     # --------------------------------------------------------
     # Guardar referencia de imagen anterior
@@ -290,45 +220,10 @@ async def subir_imagen_evento(
         "imagen_public_id"
     )
 
-    # --------------------------------------------------------
-    # Subir imagen a Cloudinary
-    # --------------------------------------------------------
-
-    imagen_url, public_id_nuevo = subir_imagen_cloudinary(
+    imagen_url, public_id_nuevo = subir_imagen(
         contenido,
         "cafeteria/eventos",
     )
-
-    # --------------------------------------------------------
-    # Guardar referencias en MongoDB
-    # --------------------------------------------------------
-
-    try:
-
-        resultado = await eventos_collection.update_one(
-            {
-                "_id": oid,
-            },
-            {
-                "$set": {
-                    "imagen_url": imagen_url,
-                    "imagen_public_id": public_id_nuevo,
-                    "updated_at": datetime.now(timezone.utc),
-                }
-            },
-        )
-
-    except PyMongoError:
-
-        print(f"Error al subir la imagen a Cloudinary: {e}")
-
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="No se pudo subir la imagen",
-        )
-        raise
-
-    if resultado.matched_count == 0:
 
         # El evento fue eliminado mientras se subía la imagen.
         eliminar_imagen_cloudinary(
@@ -341,16 +236,7 @@ async def subir_imagen_evento(
             detail="Evento no encontrado",
         )
 
-    # --------------------------------------------------------
-    # Eliminar imagen anterior
-    # --------------------------------------------------------
-
-    if public_id_anterior:
-
-        eliminar_imagen_cloudinary(
-            public_id_anterior,
-            f"reemplazo de imagen del evento {evento_id}",
-        )
+    eliminar_imagen(public_id_anterior)
 
     # --------------------------------------------------------
     # Obtener evento actualizado
@@ -387,32 +273,17 @@ async def eliminar_imagen_evento(
 
     oid = validar_object_id(evento_id, "evento")
 
-    evento = await eventos_collection.find_one(
-        {
-            "_id": oid,
-        }
+    evento = await obtener_documento_o_404(
+        eventos_collection,
+        oid,
+        "evento",
     )
-
-    if evento is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Evento no encontrado",
-        )
 
     public_id = evento.get(
         "imagen_public_id"
     )
 
-    # --------------------------------------------------------
-    # Eliminar de Cloudinary
-    # --------------------------------------------------------
-
-    if public_id:
-
-        eliminar_imagen_cloudinary(
-            public_id,
-            f"eliminación de imagen del evento {evento_id}",
-        )
+    eliminar_imagen(public_id)
 
     # --------------------------------------------------------
     # Limpiar MongoDB
@@ -469,17 +340,11 @@ async def actualizar_evento(
     # Obtener evento actual
     # --------------------------------------------------------
 
-    evento = await eventos_collection.find_one(
-        {
-            "_id": oid,
-        }
+    await obtener_documento_o_404(
+        eventos_collection,
+        oid,
+        "evento",
     )
-
-    if evento is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Evento no encontrado",
-        )
 
     # --------------------------------------------------------
     # Obtener únicamente los campos enviados
@@ -580,18 +445,11 @@ async def eliminar_evento(
 
     oid = validar_object_id(evento_id, "evento")
 
-    evento = await eventos_collection.find_one(
-        {
-            "_id": oid,
-        }
+    await obtener_documento_o_404(
+        eventos_collection,
+        oid,
+        "evento",
     )
-
-    if evento is None:
-
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Evento no encontrado",
-        )
 
     await eventos_collection.update_one(
         {
@@ -671,18 +529,11 @@ async def inscribirse_evento(
     # 1. Verificar que el evento exista
     # --------------------------------------------------------
 
-    evento = await eventos_collection.find_one(
-        {
-            "_id": oid,
-        }
+    await obtener_documento_o_404(
+        eventos_collection,
+        oid,
+        "evento",
     )
-
-    if evento is None:
-
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Evento no encontrado",
-        )
 
     # --------------------------------------------------------
     # 2. Verificar que el usuario no esté inscrito
@@ -852,18 +703,11 @@ async def cancelar_inscripcion(
     # 1. Verificar que el evento exista
     # --------------------------------------------------------
 
-    evento = await eventos_collection.find_one(
-        {
-            "_id": oid,
-        }
+    await obtener_documento_o_404(
+        eventos_collection,
+        oid,
+        "evento",
     )
-
-    if evento is None:
-
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Evento no encontrado",
-        )
 
     # --------------------------------------------------------
     # 2. Buscar inscripción activa
@@ -965,18 +809,11 @@ async def listar_inscritos(
     # Verificar evento
     # --------------------------------------------------------
 
-    evento = await eventos_collection.find_one(
-        {
-            "_id": oid,
-        }
+    await obtener_documento_o_404(
+        eventos_collection,
+        oid,
+        "evento",
     )
-
-    if evento is None:
-
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Evento no encontrado",
-        )
 
     # --------------------------------------------------------
     # Buscar inscritos
