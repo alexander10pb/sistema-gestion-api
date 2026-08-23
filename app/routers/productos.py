@@ -7,7 +7,12 @@ from app.auth.dependencies import get_current_admin
 from app.database import productos_collection
 from app.image_utils import eliminar_imagen, leer_imagen_validada, subir_imagen
 from app.schemas import CategoriaProducto, ProductoCreate, ProductoOut, ProductoUpdate
-from app.utils import obtener_documento_o_404, producto_helper, validar_object_id
+from app.utils import (
+    documento_requerido,
+    obtener_documento_o_404,
+    producto_helper,
+    validar_object_id,
+)
 
 router = APIRouter(prefix="/productos", tags=["Productos"])
 
