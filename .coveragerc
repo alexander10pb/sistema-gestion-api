@@ -1,0 +1,11 @@
+[run]
+source =
+    app
+    main
+
+[report]
+omit =
+    app/__init__.py
+    app/auth/__init__.py
+    app/routers/__init__.py
+    app/schemas/__init__.py
