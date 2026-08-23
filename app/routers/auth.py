@@ -1,10 +1,13 @@
+import logging
 from datetime import datetime, timezone
 
+import jwt
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from pymongo.errors import DuplicateKeyError
 
 from app.auth.dependencies import (
+    credenciales_invalidas,
     get_current_user,
     oauth2_scheme
 )
@@ -26,6 +29,11 @@ from app.database import (
     token_blacklist_collection,
     users_collection
 )
+
+from app.utils import documento_requerido
+
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(
@@ -76,12 +84,12 @@ async def registrar_usuario(
             nuevo_usuario
         )
 
-    except DuplicateKeyError:
+    except DuplicateKeyError as exc:
 
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Ya existe un usuario registrado con ese email",
-        )
+        ) from exc
 
     creado = await users_collection.find_one(
         {
@@ -89,7 +97,9 @@ async def registrar_usuario(
         }
     )
 
-    return usuario_helper(creado)
+    return usuario_helper(
+        documento_requerido(creado, "usuario", "registro")
+    )
 
 
 @router.post(
@@ -118,7 +128,7 @@ async def iniciar_sesion(
         usuario is None
         or not verify_password(
             form_data.password,
-            usuario["password_hash"]
+            usuario.get("password_hash", "")
         )
     ):
         raise HTTPException(
@@ -152,17 +162,34 @@ async def cerrar_sesion(
     a la blacklist en MongoDB.
     """
 
-    payload = decode_access_token(token)
+    try:
+        payload = decode_access_token(token)
+    except jwt.PyJWTError as exc:
+        # get_current_user ya validó el token; llegar aquí implica que algo
+        # cambió entre ambas decodificaciones.
+        logger.warning("Token no decodificable durante el logout: %s", exc)
+        raise credenciales_invalidas() from exc
 
-    await token_blacklist_collection.insert_one(
-        {
-            "jti": payload["jti"],
-            "expira_en": datetime.fromtimestamp(
-                payload["exp"],
-                tz=timezone.utc
-            ),
-        }
-    )
+    jti = payload.get("jti")
+    exp = payload.get("exp")
+
+    if jti is None or exp is None:
+        logger.warning("Token sin jti/exp: no se puede invalidar")
+        raise credenciales_invalidas()
+
+    try:
+        await token_blacklist_collection.insert_one(
+            {
+                "jti": jti,
+                "expira_en": datetime.fromtimestamp(
+                    exp,
+                    tz=timezone.utc
+                ),
+            }
+        )
+    except DuplicateKeyError:
+        # El token ya estaba invalidado: el logout es idempotente.
+        logger.info("El token %s ya estaba en la blacklist", jti)
 
     return {
         "mensaje": "Sesión cerrada correctamente"
