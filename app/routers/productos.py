@@ -1,6 +1,7 @@
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from pymongo.errors import PyMongoError
 
 from app.auth.dependencies import get_current_user
 from app.database import productos_collection
@@ -49,12 +50,14 @@ async def obtener_producto(producto_id: str):
     status_code=status.HTTP_201_CREATED,
     summary="Registrar un nuevo producto",
 )
-async def crear_producto(producto: ProductoCreate, _usuario: dict = Depends(get_current_user)):
-    """Crea un nuevo producto del menú (POST). Requiere estar autenticado."""
+async def crear_producto(producto: ProductoCreate, _usuario: dict = Depends(get_current_admin)):
+    """Crea un nuevo producto del menú (POST). Requiere rol de administrador."""
     nuevo_producto = producto.model_dump()
     resultado = await productos_collection.insert_one(nuevo_producto)
     creado = await productos_collection.find_one({"_id": resultado.inserted_id})
-    return producto_helper(creado)
+    return producto_helper(
+        documento_requerido(creado, "producto", "creación")
+    )
 
 
 @router.post(
@@ -68,7 +71,7 @@ async def subir_imagen_producto(
         ...,
         description="Imagen del producto (jpg, png, webp o gif, máx. 5 MB)",
     ),
-    _usuario: dict = Depends(get_current_user),
+    _usuario: dict = Depends(get_current_admin),
 ):
     """Sube una imagen a Cloudinary y la asocia al producto."""
 
@@ -106,7 +109,9 @@ async def subir_imagen_producto(
 
     actualizado = await productos_collection.find_one({"_id": oid})
 
-    return producto_helper(actualizado)
+    return producto_helper(
+        documento_requerido(actualizado, "producto", "subida de imagen")
+    )
 
 
 @router.delete(
@@ -116,7 +121,7 @@ async def subir_imagen_producto(
 )
 async def eliminar_imagen_producto(
     producto_id: str,
-    _usuario: dict = Depends(get_current_user),
+    _usuario: dict = Depends(get_current_admin),
 ):
     oid = validar_object_id(producto_id, "producto")
 
@@ -143,12 +148,14 @@ async def eliminar_imagen_producto(
 
     actualizado = await productos_collection.find_one({"_id": oid})
 
-    return producto_helper(actualizado)
+    return producto_helper(
+        documento_requerido(actualizado, "producto", "eliminación de imagen")
+    )
 
 
 @router.put("/{producto_id}", response_model=ProductoOut, summary="Actualizar un producto")
 async def actualizar_producto(
-    producto_id: str, cambios: ProductoUpdate, _usuario: dict = Depends(get_current_user)
+    producto_id: str, cambios: ProductoUpdate, _usuario: dict = Depends(get_current_admin)
 ):
     oid = validar_object_id(producto_id, "producto")
     datos = {k: v for k, v in cambios.model_dump(exclude_unset=True).items()}
@@ -164,7 +171,9 @@ async def actualizar_producto(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Producto no encontrado")
 
     actualizado = await productos_collection.find_one({"_id": oid})
-    return producto_helper(actualizado)
+    return producto_helper(
+        documento_requerido(actualizado, "producto", "actualización")
+    )
 
 
 @router.delete(
@@ -174,7 +183,7 @@ async def actualizar_producto(
 )
 async def eliminar_producto(
     producto_id: str,
-    _usuario: dict = Depends(get_current_user),
+    _usuario: dict = Depends(get_current_admin),
 ):
     """Elimina un producto del menú por id."""
 

@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from typing import List
 
@@ -10,7 +11,7 @@ from fastapi import (
     status,
 )
 from pymongo import ReturnDocument
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from app.auth.dependencies import get_current_user, get_current_admin
 from app.database import eventos_collection, inscripciones_collection
@@ -169,7 +170,9 @@ async def crear_evento(
         }
     )
 
-    return evento_helper(creado)
+    return evento_helper(
+        documento_requerido(creado, "evento", "creación")
+    )
 
 
 # ============================================================
@@ -222,22 +225,16 @@ async def subir_imagen_evento(
         "cafeteria/eventos",
     )
 
-    # --------------------------------------------------------
-    # Guardar referencias en MongoDB
-    # --------------------------------------------------------
+        # El evento fue eliminado mientras se subía la imagen.
+        eliminar_imagen_cloudinary(
+            public_id_nuevo,
+            "evento inexistente",
+        )
 
-    await eventos_collection.update_one(
-        {
-            "_id": oid,
-        },
-        {
-            "$set": {
-                "imagen_url": imagen_url,
-                "imagen_public_id": public_id_nuevo,
-                "updated_at": datetime.now(timezone.utc),
-            }
-        },
-    )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Evento no encontrado",
+        )
 
     eliminar_imagen(public_id_anterior)
 
@@ -251,7 +248,9 @@ async def subir_imagen_evento(
         }
     )
 
-    return evento_helper(actualizado)
+    return evento_helper(
+        documento_requerido(actualizado, "evento", "subida de imagen")
+    )
 
 
 # ============================================================
@@ -309,7 +308,9 @@ async def eliminar_imagen_evento(
         }
     )
 
-    return evento_helper(actualizado)
+    return evento_helper(
+        documento_requerido(actualizado, "evento", "eliminación de imagen")
+    )
 
 
 # ============================================================
@@ -418,7 +419,9 @@ async def actualizar_evento(
         }
     )
 
-    return evento_helper(actualizado)
+    return evento_helper(
+        documento_requerido(actualizado, "evento", "actualización")
+    )
 
 
 # ============================================================
@@ -466,6 +469,37 @@ async def eliminar_evento(
 # ============================================================
 # INSCRIBIRSE A EVENTO
 # ============================================================
+
+async def _devolver_cupo(oid, contexto: str) -> None:
+    """
+    Libera un cupo reservado.
+
+    Se usa en los caminos de error de la inscripción. Un fallo aquí deja el
+    contador de inscritos inflado, por lo que se registra explícitamente en
+    lugar de perderse dentro del error original.
+    """
+    try:
+        await eventos_collection.update_one(
+            {
+                "_id": oid,
+                "inscritos": {
+                    "$gt": 0,
+                },
+            },
+            {
+                "$inc": {
+                    "inscritos": -1,
+                }
+            },
+        )
+    except PyMongoError:
+        logger.exception(
+            "No se pudo devolver el cupo del evento %s (%s): "
+            "el contador de inscritos quedó inflado",
+            oid,
+            contexto,
+        )
+
 
 @router.post(
     "/{evento_id}/inscribirse",
@@ -578,30 +612,32 @@ async def inscribirse_evento(
             )
         )
 
-    except DuplicateKeyError:
+    except DuplicateKeyError as exc:
 
         # ----------------------------------------------------
         # Si ya existía la inscripción, devolver el cupo
         # ----------------------------------------------------
 
-        await eventos_collection.update_one(
-            {
-                "_id": oid,
-                "inscritos": {
-                    "$gt": 0,
-                },
-            },
-            {
-                "$inc": {
-                    "inscritos": -1,
-                }
-            },
-        )
+        await _devolver_cupo(oid, "inscripción duplicada")
 
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Ya estás inscrito en este evento",
+        ) from exc
+
+    except PyMongoError:
+
+        # El cupo ya fue reservado: sin la inscripción quedaría ocupado
+        # para siempre.
+        logger.exception(
+            "Fallo al crear la inscripción del usuario %s en el evento %s",
+            usuario_id,
+            evento_id,
         )
+
+        await _devolver_cupo(oid, "fallo al crear la inscripción")
+
+        raise
 
     # --------------------------------------------------------
     # 5. Obtener inscripción creada
@@ -618,19 +654,12 @@ async def inscribirse_evento(
         # Caso extremadamente improbable.
         # Devolvemos el cupo para mantener consistencia.
 
-        await eventos_collection.update_one(
-            {
-                "_id": oid,
-                "inscritos": {
-                    "$gt": 0,
-                },
-            },
-            {
-                "$inc": {
-                    "inscritos": -1,
-                }
-            },
+        logger.error(
+            "No se pudo releer la inscripción %s recién creada",
+            resultado.inserted_id,
         )
+
+        await _devolver_cupo(oid, "inscripción no recuperable")
 
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -726,22 +755,33 @@ async def cancelar_inscripcion(
     # 4. Liberar cupo
     # --------------------------------------------------------
 
-    await eventos_collection.update_one(
-        {
-            "_id": oid,
-            "inscritos": {
-                "$gt": 0,
+    try:
+        await eventos_collection.update_one(
+            {
+                "_id": oid,
+                "inscritos": {
+                    "$gt": 0,
+                },
             },
-        },
-        {
-            "$inc": {
-                "inscritos": -1,
+            {
+                "$inc": {
+                    "inscritos": -1,
+                },
+                "$set": {
+                    "updated_at": datetime.now(timezone.utc),
+                },
             },
-            "$set": {
-                "updated_at": datetime.now(timezone.utc),
-            },
-        },
-    )
+        )
+    except PyMongoError:
+        # La inscripción ya está cancelada: dejar constancia de que el
+        # contador del evento quedó desincronizado.
+        logger.exception(
+            "Inscripción %s cancelada pero no se pudo liberar el cupo "
+            "del evento %s",
+            inscripcion["_id"],
+            evento_id,
+        )
+        raise
 
     return None
 
