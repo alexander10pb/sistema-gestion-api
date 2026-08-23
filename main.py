@@ -1,8 +1,10 @@
-import logging
+import logging, os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pymongo.errors import PyMongoError
 
 from app.database import crear_indices
 from app.logging_config import configurar_logging

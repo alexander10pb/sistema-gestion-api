@@ -23,12 +23,6 @@ if not SECRET_KEY or SECRET_KEY == CLAVE_DE_EJEMPLO:
 
 ALGORITHM = "HS256"
 
-if SECRET_KEY == CLAVE_POR_DEFECTO:
-    logger.warning(
-        "SECRET_KEY no está definida: se usa la clave de ejemplo, "
-        "cualquiera podría firmar tokens válidos"
-    )
-
 _expiracion = os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60")
 
 try:
