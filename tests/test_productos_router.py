@@ -45,7 +45,7 @@ async def test_get_product_by_id_404_and_malformed_id_400(client):
 
 async def test_get_product_happy_path_and_upload_unknown_product(
     client,
-    normal_user,
+    admin_user,
     mock_database,
 ):
     product = await _insert_product(mock_database["productos"])
@@ -54,13 +54,13 @@ async def test_get_product_happy_path_and_upload_unknown_product(
     assert response.json()["nombre"] == "Café"
     missing_image = await client.post(
         f"/productos/{ObjectId()}/imagen",
-        headers=normal_user,
+        headers=admin_user,
         files={"archivo": ("new.jpg", b"data", "image/jpeg")},
     )
     assert missing_image.status_code == 404
 
 
-async def test_create_product_requires_auth_and_validates_body(client, normal_user):
+async def test_create_product_requires_auth_and_validates_body(client, admin_user):
     anonymous = await client.post(
         "/productos",
         json={
@@ -74,14 +74,14 @@ async def test_create_product_requires_auth_and_validates_body(client, normal_us
         {"nombre": "Té", "precio": 0, "categoria": "bebida"},
         {"nombre": "Té", "precio": 1000, "categoria": "no-categoria"},
     ]:
-        invalid = await client.post("/productos", json=payload, headers=normal_user)
+        invalid = await client.post("/productos", json=payload, headers=admin_user)
         assert invalid.status_code == 422
 
 
-async def test_create_product_happy_path(client, normal_user):
+async def test_create_product_happy_path(client, admin_user):
     response = await client.post(
         "/productos",
-        headers=normal_user,
+        headers=admin_user,
         json={
             "nombre": "Té",
             "descripcion": "Té caliente",
@@ -96,25 +96,25 @@ async def test_create_product_happy_path(client, normal_user):
 
 async def test_update_product_empty_body_unknown_and_happy_path(
     client,
-    normal_user,
+    admin_user,
     mock_database,
 ):
     product = await _insert_product(mock_database["productos"])
     empty = await client.put(
         f"/productos/{product['_id']}",
-        headers=normal_user,
+        headers=admin_user,
         json={},
     )
     assert empty.status_code == 400
     missing = await client.put(
         f"/productos/{ObjectId()}",
-        headers=normal_user,
+        headers=admin_user,
         json={"precio": 6000},
     )
     assert missing.status_code == 404
     updated = await client.put(
         f"/productos/{product['_id']}",
-        headers=normal_user,
+        headers=admin_user,
         json={"precio": 6000, "disponible": False},
     )
     assert updated.status_code == 200
@@ -124,13 +124,13 @@ async def test_update_product_empty_body_unknown_and_happy_path(
 
 async def test_delete_product_404_and_happy_path_destroys_image(
     client,
-    normal_user,
+    admin_user,
     mock_database,
     cloudinary_mocks,
 ):
     missing = await client.delete(
         f"/productos/{ObjectId()}",
-        headers=normal_user,
+        headers=admin_user,
     )
     assert missing.status_code == 404
     product = await _insert_product(
@@ -139,7 +139,7 @@ async def test_delete_product_404_and_happy_path_destroys_image(
     )
     response = await client.delete(
         f"/productos/{product['_id']}",
-        headers=normal_user,
+        headers=admin_user,
     )
     assert response.status_code == 204
     assert await mock_database["productos"].find_one({"_id": product["_id"]}) is None
@@ -151,19 +151,19 @@ async def test_delete_product_404_and_happy_path_destroys_image(
 
 async def test_upload_product_image_rejects_bad_extension_and_oversized_file(
     client,
-    normal_user,
+    admin_user,
     mock_database,
 ):
     product = await _insert_product(mock_database["productos"])
     bad_extension = await client.post(
         f"/productos/{product['_id']}/imagen",
-        headers=normal_user,
+        headers=admin_user,
         files={"archivo": ("document.txt", b"data", "text/plain")},
     )
     assert bad_extension.status_code == 400
     oversized = await client.post(
         f"/productos/{product['_id']}/imagen",
-        headers=normal_user,
+        headers=admin_user,
         files={"archivo": ("large.jpg", b"x" * (5 * 1024 * 1024 + 1), "image/jpeg")},
     )
     assert oversized.status_code == 400
@@ -171,7 +171,7 @@ async def test_upload_product_image_rejects_bad_extension_and_oversized_file(
 
 async def test_upload_product_image_cloudinary_error_returns_500(
     client,
-    normal_user,
+    admin_user,
     mock_database,
     monkeypatch,
 ):
@@ -182,7 +182,7 @@ async def test_upload_product_image_cloudinary_error_returns_500(
     )
     response = await client.post(
         f"/productos/{product['_id']}/imagen",
-        headers=normal_user,
+        headers=admin_user,
         files={"archivo": ("new.jpg", b"data", "image/jpeg")},
     )
     assert response.status_code == 500
@@ -191,7 +191,7 @@ async def test_upload_product_image_cloudinary_error_returns_500(
 
 async def test_upload_product_image_stores_references_and_destroys_previous(
     client,
-    normal_user,
+    admin_user,
     mock_database,
     cloudinary_mocks,
 ):
@@ -202,7 +202,7 @@ async def test_upload_product_image_stores_references_and_destroys_previous(
     )
     response = await client.post(
         f"/productos/{product['_id']}/imagen",
-        headers=normal_user,
+        headers=admin_user,
         files={"archivo": ("new.jpg", b"data", "image/jpeg")},
     )
     assert response.status_code == 200
@@ -217,7 +217,7 @@ async def test_upload_product_image_stores_references_and_destroys_previous(
 
 async def test_product_image_cleanup_errors_do_not_fail_request(
     client,
-    normal_user,
+    admin_user,
     mock_database,
     monkeypatch,
 ):
@@ -231,13 +231,13 @@ async def test_product_image_cleanup_errors_do_not_fail_request(
     )
     uploaded = await client.post(
         f"/productos/{product['_id']}/imagen",
-        headers=normal_user,
+        headers=admin_user,
         files={"archivo": ("new.jpg", b"data", "image/jpeg")},
     )
     assert uploaded.status_code == 200
     deleted = await client.delete(
         f"/productos/{product['_id']}/imagen",
-        headers=normal_user,
+        headers=admin_user,
     )
     assert deleted.status_code == 200
     await mock_database["productos"].update_one(
@@ -246,20 +246,20 @@ async def test_product_image_cleanup_errors_do_not_fail_request(
     )
     removed = await client.delete(
         f"/productos/{product['_id']}",
-        headers=normal_user,
+        headers=admin_user,
     )
     assert removed.status_code == 204
 
 
 async def test_delete_product_image_404_and_happy_path_clears_fields(
     client,
-    normal_user,
+    admin_user,
     mock_database,
     cloudinary_mocks,
 ):
     missing = await client.delete(
         f"/productos/{ObjectId()}/imagen",
-        headers=normal_user,
+        headers=admin_user,
     )
     assert missing.status_code == 404
     product = await _insert_product(
@@ -269,7 +269,7 @@ async def test_delete_product_image_404_and_happy_path_clears_fields(
     )
     response = await client.delete(
         f"/productos/{product['_id']}/imagen",
-        headers=normal_user,
+        headers=admin_user,
     )
     assert response.status_code == 200
     assert response.json()["imagen_url"] is None
