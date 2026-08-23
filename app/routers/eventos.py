@@ -31,6 +31,8 @@ router = APIRouter(
     tags=["Eventos"],
 )
 
+logger = logging.getLogger(__name__)
+
 
 # ============================================================
 # LISTAR EVENTOS
