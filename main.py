@@ -134,6 +134,6 @@ async def error_no_controlado(request: Request, exc: Exception):
 @app.get("/", tags=["Root"], summary="Estado de la API")
 async def root():
     return {
-        "mensaje": "API de la cafetería funcionando correctamente",
+        "mensaje": f"{app.title} funcionando correctamente",
         "docs": "/docs"
     }
