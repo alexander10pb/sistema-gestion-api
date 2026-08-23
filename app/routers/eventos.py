@@ -15,7 +15,7 @@ from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from app.auth.dependencies import get_current_user, get_current_admin
 from app.database import eventos_collection, inscripciones_collection
-from app.image_utils import eliminar_imagen, leer_imagen_validada, subir_imagen
+from app.image_utils import eliminar_imagen, leer_imagen_validada, subir_imagen 
 from app.schemas import (
     EventoCreate,
     EventoOut,
@@ -23,7 +23,7 @@ from app.schemas import (
     InscripcionOut,
     EstadoInscripcion
 )
-from app.utils import evento_helper, obtener_documento_o_404, validar_object_id
+from app.utils import evento_helper, obtener_documento_o_404, validar_object_id, eliminar_imagen_cloudinary, documento_requerido
 
 
 router = APIRouter(
@@ -225,6 +225,17 @@ async def subir_imagen_evento(
         "cafeteria/eventos",
     )
 
+    resultado = await eventos_collection.update_one(
+        {"_id": oid},
+        {
+            "$set": {
+                "imagen_url": imagen_url,
+                "imagen_public_id": public_id_nuevo,
+            }
+        },
+    )
+
+    if resultado.matched_count == 0:
         # El evento fue eliminado mientras se subía la imagen.
         eliminar_imagen_cloudinary(
             public_id_nuevo,

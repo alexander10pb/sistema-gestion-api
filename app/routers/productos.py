@@ -3,7 +3,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pymongo.errors import PyMongoError
 
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import get_current_admin
 from app.database import productos_collection
 from app.image_utils import eliminar_imagen, leer_imagen_validada, subir_imagen
 from app.schemas import CategoriaProducto, ProductoCreate, ProductoOut, ProductoUpdate
