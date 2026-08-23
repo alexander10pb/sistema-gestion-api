@@ -5,7 +5,8 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pymongo.errors import PyMongoError
 
-from app.auth.dependencies import get_current_user
+from app import cloudinary_config
+from app.auth.dependencies import get_current_admin
 from app.database import productos_collection
 from app.schemas import CategoriaProducto, ProductoCreate, ProductoOut, ProductoUpdate
 from app.utils import (
@@ -60,8 +61,8 @@ async def obtener_producto(producto_id: str):
     status_code=status.HTTP_201_CREATED,
     summary="Registrar un nuevo producto",
 )
-async def crear_producto(producto: ProductoCreate, _usuario: dict = Depends(get_current_user)):
-    """Crea un nuevo producto del menú (POST). Requiere estar autenticado."""
+async def crear_producto(producto: ProductoCreate, _usuario: dict = Depends(get_current_admin)):
+    """Crea un nuevo producto del menú (POST). Requiere rol de administrador."""
     nuevo_producto = producto.model_dump()
     resultado = await productos_collection.insert_one(nuevo_producto)
     creado = await productos_collection.find_one({"_id": resultado.inserted_id})
@@ -81,7 +82,7 @@ async def subir_imagen_producto(
         ...,
         description="Imagen del producto (jpg, png, webp o gif, máx. 5 MB)",
     ),
-    _usuario: dict = Depends(get_current_user),
+    _usuario: dict = Depends(get_current_admin),
 ):
     """Sube una imagen a Cloudinary y la asocia al producto."""
 
@@ -142,12 +143,11 @@ async def subir_imagen_producto(
         eliminar_imagen_cloudinary(public_id_nuevo, "rollback de subida")
         raise
 
-    if resultado.matched_count == 0:
-        # El producto fue eliminado mientras se subía la imagen.
-        eliminar_imagen_cloudinary(public_id_nuevo, "producto inexistente")
+    except Exception as e:
+        print(f"Error al subir la imagen a Cloudinary: {e}")
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Producto no encontrado",
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="No se pudo subir la imagen",
         )
 
     # Si había una imagen anterior de Cloudinary, eliminarla
@@ -171,7 +171,7 @@ async def subir_imagen_producto(
 )
 async def eliminar_imagen_producto(
     producto_id: str,
-    _usuario: dict = Depends(get_current_user),
+    _usuario: dict = Depends(get_current_admin),
 ):
     oid = validar_object_id(producto_id, "producto")
 
@@ -212,7 +212,7 @@ async def eliminar_imagen_producto(
 
 @router.put("/{producto_id}", response_model=ProductoOut, summary="Actualizar un producto")
 async def actualizar_producto(
-    producto_id: str, cambios: ProductoUpdate, _usuario: dict = Depends(get_current_user)
+    producto_id: str, cambios: ProductoUpdate, _usuario: dict = Depends(get_current_admin)
 ):
     oid = validar_object_id(producto_id, "producto")
     datos = {k: v for k, v in cambios.model_dump(exclude_unset=True).items()}
@@ -240,7 +240,7 @@ async def actualizar_producto(
 )
 async def eliminar_producto(
     producto_id: str,
-    _usuario: dict = Depends(get_current_user),
+    _usuario: dict = Depends(get_current_admin),
 ):
     """Elimina un producto del menú por id."""
 

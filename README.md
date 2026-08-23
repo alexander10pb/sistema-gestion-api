@@ -260,9 +260,11 @@ Los productos pueden incluir imágenes almacenadas en **Cloudinary**.
 |--------|------|-------------|:-----:|
 | GET | `/productos` | Lista los productos | No |
 | GET | `/productos/{id}` | Obtiene un producto | No |
-| POST | `/productos` | Crea un producto | Sí |
-| PUT | `/productos/{id}` | Actualiza un producto | Sí |
-| DELETE | `/productos/{id}` | Elimina un producto | Sí |
+| POST | `/productos` | Crea un producto | Sí (admin) |
+| PUT | `/productos/{id}` | Actualiza un producto | Sí (admin) |
+| DELETE | `/productos/{id}` | Elimina un producto | Sí (admin) |
+| POST | `/productos/{id}/imagen` | Sube o reemplaza la imagen | Sí (admin) |
+| DELETE | `/productos/{id}/imagen` | Quita la imagen | Sí (admin) |
 
 El listado permite utilizar filtros opcionales como:
 

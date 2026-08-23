@@ -320,11 +320,11 @@ async def subir_imagen_evento(
 
     except PyMongoError:
 
-        # Sin la referencia guardada, la imagen recién subida quedaría
-        # huérfana en Cloudinary.
-        eliminar_imagen_cloudinary(
-            public_id_nuevo,
-            "rollback de subida",
+        print(f"Error al subir la imagen a Cloudinary: {e}")
+
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="No se pudo subir la imagen",
         )
         raise
 

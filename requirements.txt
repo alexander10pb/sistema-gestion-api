@@ -14,10 +14,10 @@ idna==3.18
 motor==3.5.1
 passlib==1.7.4
 pydantic==2.9.2
-PyJWT==2.9.0
+PyJWT==2.13.0
 pymongo==4.8.0
-python-dotenv==1.0.1
-python-multipart==0.0.9
+python-dotenv==1.2.2
+python-multipart==0.0.31
 PyYAML==6.0.3
 six==1.17.0
 starlette==1.4.1
